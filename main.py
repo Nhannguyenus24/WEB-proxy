@@ -73,6 +73,8 @@ def time_access_allowed(start_time, end_time):
         return False
 
 def resolve_domain_to_ip(domain): #example.com/login
+    if domain.startswith("www."):
+        domain = domain[4:]
     try:
         ip_address = socket.gethostbyname(domain)
         return ip_address
