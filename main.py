@@ -7,7 +7,7 @@ import configparser
 import shutil
 
 maximum_connect = 30
-valid_method = ['GET', 'POST', 'HEAD']
+valid_method = ['GET', 'POST', 'HEAD', '--HEAD']
 proxy_host = '127.0.0.1'
 proxy_port = 8888
 server_port = 80
@@ -47,8 +47,15 @@ def put_image_in_cache(cache_directory, website, image_name, image_data):
         f.write(image_data)
 
 def initialize_cache(cache_timeout, cache_directory):
-    if time.time() - os.path.getctime(cache_directory) >= cache_timeout:
-        create_or_clear_directory(main_directory)
+    current_time = time.time()
+    for folder in os.listdir(cache_directory):
+        folder_path = os.path.join(cache_directory, folder)
+
+        if os.path.isdir(folder_path):
+            folder_create_time = os.path.getctime(folder_path)
+            if current_time - folder_create_time >= cache_timeout:
+                shutil.rmtree(folder_path)
+                print(f"Đã xóa thư mục '{folder}' vì đã vượt quá thời gian timeout.")
 
 def read_config_file(file_name):
     config = configparser.ConfigParser()
@@ -65,7 +72,7 @@ def time_access_allowed(start_time, end_time):
     else:
         return False
 
-def resolve_domain_to_ip(domain):
+def resolve_domain_to_ip(domain): #example.com/login
     try:
         ip_address = socket.gethostbyname(domain)
         return ip_address
@@ -116,7 +123,6 @@ def respone_from_server(client_socket):
                 ip_server = resolve_domain_to_ip(domain)
                 if ip_server:
                     if method.upper() in valid_method:
-                        print(info_dict)
                         if "image/" in info_dict.get("accept", "") and len(image) > 0:
                             cache = get_image_from_cache(main_directory, domain, image)
                             if cache:
@@ -129,10 +135,22 @@ def respone_from_server(client_socket):
                             server_socket.connect((ip_server,server_port))
                             print(f"Kết nối tới trang web {domain}.")
                             server_socket.sendall(request)
-                            response = server_socket.recv(999999)
+                            response = b""
+                            while b"\r\n\r\n" not in response:
+                                data = server_socket.recv(999999)
+                                response += data
+                            if method.upper() == "HEAD":
+                                client_socket.sendall(response)
+                                client_socket.close()
+                                server_socket.close()
+                                return
+                            if method.upper() == "POST" and b"100" in response.split(b"\r\n")[0]:
+                                server_socket.sendall(response)
+                                data = server_socket.recv(999999)
+                                response = data
                             thing1, thing2, info_dict = analyze_header(response)
                             if "transfer-encoding" in info_dict:
-                                while not response.endswith(b"0/r/n/r/n"):
+                                while not response.endswith(b"0\r\n\r\n"):
                                     try:
                                         data = server_socket.recv(999999)
                                         response += data 
@@ -148,7 +166,8 @@ def respone_from_server(client_socket):
                                         print(f"Xảy ra lỗi khi cố gắng lấy thông tin từ máy chủ {domain}: {e}")
                                         break
                             if info_dict.get("content-type", "").startswith("image/"):
-                                put_image_in_cache(main_directory,domain, image, response)
+                                head, body = response.split(b"\r\n\r\n", 1)
+                                put_image_in_cache(main_directory,domain, image, body)
                             client_socket.sendall(response)
                             print(f"Nhận dữ liệu từ {domain} thành công!")
                         except socket.error as e:
@@ -156,13 +175,13 @@ def respone_from_server(client_socket):
                         finally:
                             server_socket.close()
                     else: #wrong method
-                        print("Phương thức không hợp lệ!")
+                        print(f"Phương thức {method.upper()} không hợp lệ!")
                         client_socket.send(read_html_and_css(error_page, error_css).encode("utf-8"))
                 else: # ip khong ton tai
                     print("Không thể phân giải tên miền thành IP!")
                     client_socket.send(read_html_and_css(error_page, error_css).encode("utf-8"))
             else: # time limit
-                print("Truy cập bị giới hạn!")
+                print("Truy cập bị giới hạn thời gian!")
                 client_socket.send(read_html_and_css(time_limit_page, time_css).encode("utf-8"))
         else: # khong ton tai trong white list
             print(f"Tên miền {domain} không nằm trong danh sách được phép truy cập!")
